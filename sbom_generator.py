@@ -1,8 +1,12 @@
 import argparse
 import json
+import logging
 import uuid
-from datetime import datetime
+import re
 
+from datetime import datetime, timezone
+
+from spdx_tools.common.spdx_licensing import spdx_licensing
 from spdx_tools.spdx.model.document import Document, CreationInfo
 from spdx_tools.spdx.model.package import Package
 from spdx_tools.spdx.model.file import File
@@ -11,12 +15,78 @@ from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
 from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
 from spdx_tools.spdx.model.actor import Actor, ActorType
 from spdx_tools.spdx.model.package import ExternalPackageRef, ExternalPackageRefCategory
+from spdx_tools.spdx.model.extracted_licensing_info import ExtractedLicensingInfo
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_file
 
+
+from license_data import FEDORA_SPDX_ID_MAP, SPDX_IDS
+
 GENERATOR_VERSION = '1.0'
+SUPPLIER_ORG = 'AlmaLinux OS Foundation'
 
 def gen_uuid16():
     return uuid.uuid4().hex[:16]
+
+def process_license_expression(license_text):
+    """
+    Process a license string and return both the raw license and SPDX-compliant version.
+    Returns spdx_license_parsed
+    """
+    if not license_text or license_text.strip() == '':
+        return SpdxNoAssertion()
+
+    spdx_license_text = convert_to_spdx_format(license_text)
+    spdx_license_parsed = spdx_licensing.parse(spdx_license_text)
+
+    return spdx_license_parsed
+
+def convert_to_spdx_format(license_text):
+    """
+    Convert license text to SPDX-compliant format by mapping Fedora license names to SPDX identifiers.
+    """
+    if not license_text or license_text.strip() == '':
+        return SpdxNoAssertion()
+    # Handle composite licenses with AND/OR operators
+    # First, normalize the operators (case-insensitive)
+    result = license_text
+    result = re.sub(r'\b(and)\b', 'AND', result, flags=re.IGNORECASE)
+    result = re.sub(r'\b(or)\b', 'OR', result, flags=re.IGNORECASE)
+    # Split by operators while preserving them
+    parts = re.split(r'\s+(AND|OR)\s+', result)
+    # Process individual license parts
+    processed_parts = []
+    for part in parts:
+        if part.strip() in ['AND', 'OR']:
+            processed_parts.append(part.strip())
+        else:
+            # This is a license name - convert it
+            converted = convert_single_license(part.strip())
+            processed_parts.append(converted)
+    return ' '.join(processed_parts)
+
+def convert_single_license(license_text):
+    """
+    Convert a single Fedora license name to SPDX license identifier.
+    """
+    if not license_text or license_text.strip() == '':
+        return SpdxNoAssertion()
+    license_text = license_text.strip()
+    # Check if already a valid SPDX ID
+    if license_text in SPDX_IDS:
+        return license_text
+    # Try to map from Fedora naming to SPDX
+    if license_text in FEDORA_SPDX_ID_MAP:
+        return FEDORA_SPDX_ID_MAP[license_text]
+    # If no mapping found, create a LicenseRef
+    sanitized_name = (
+        license_text.replace(' ', '-')
+                    .replace('/', '-')
+                    .replace('+', '-')
+                    .replace('(', '')
+                    .replace(')', '')
+                    .replace(',', '')
+    )
+    return f'LicenseRef-{sanitized_name}'
 
 def gen_pkg_spdx_id(pkg_name):
     chars_to_replace = ['_', '+']
@@ -35,18 +105,30 @@ def sanitize_cpe_pkg_name(name):
             result.append(f"\\{ch}")
     return "".join(result)
 
-  def build_package_component(pkg, distro):
+def build_package_component(pkg, distro):
     pkg_spdx_id = gen_pkg_spdx_id(pkg['name'])
+    # Process license information
+    pkg_license = pkg.get('license')
+    spdx_license_parsed = (
+        'NOASSERTION' if not pkg_license
+        else process_license_expression(pkg_license)
+    )
+    pkg_vendor = pkg.get('vendor')
+    vendor = (
+        SpdxNoAssertion() if not pkg_vendor
+        else Actor(ActorType.ORGANIZATION, pkg_vendor)
+    )
     pkg_spdx = Package(
         spdx_id=pkg_spdx_id,
         name=pkg['name'],
         version=pkg['version'] + '-' + pkg['release'],
-        supplier=Actor(ActorType.ORGANIZATION, pkg.get('vendor','Unknown')),
-        originator=Actor(ActorType.ORGANIZATION, pkg.get('vendor','Unknown')),
+        supplier=Actor(ActorType.ORGANIZATION, SUPPLIER_ORG),
+        originator=vendor,
         download_location=SpdxNoAssertion(),
-        license_concluded=SpdxNoAssertion(),
-        license_declared=None,
+        license_concluded=spdx_license_parsed,
+        license_declared=spdx_license_parsed,
         copyright_text=SpdxNoAssertion(),
+        source_info='acquired info from RPM database',
         summary=None,
         description=None,
     )
@@ -101,7 +183,7 @@ def generate_sbom(name, metadata_path):
                 f'AlmaLinux OS Cloud Images SBOM Generator {GENERATOR_VERSION}'
             )
         ],
-        created=datetime.utcnow()
+        created=datetime.now(timezone.utc)
     )
 
     doc = Document(
@@ -118,7 +200,9 @@ def generate_sbom(name, metadata_path):
 
     distro = metadata["distribution"]
     distro_for_purl = f"{distro['name']}-{distro['version'].split('.')[0]}"
-    # Add Packages, Files, Relationships
+    extracted_licensing_info = set()
+
+    # Add Packages, Files, Relationships, LicenseRefs
     for pkg in metadata["packages"].values():
         pkg_obj = build_package_component(pkg, distro_for_purl)
         doc.packages.append(pkg_obj)
@@ -132,6 +216,23 @@ def generate_sbom(name, metadata_path):
                 related_spdx_element_id=file_obj.spdx_id
             )
             doc.relationships.append(rel)
+
+        pkg_license = str(pkg_obj.license_concluded)
+        if not pkg_license:
+            continue
+        if pkg_license not in SPDX_IDS:
+            extracted_licensing_info.add(
+                (pkg_license, pkg.get('license'))
+            )
+
+    for license in extracted_licensing_info:
+        eli = ExtractedLicensingInfo(
+            license_id=license[0],
+            license_name=license[1],
+            extracted_text='NONE',
+        )
+        doc.extracted_licensing_info.append(eli)
+
     return doc
 
 if __name__ == '__main__':
@@ -144,6 +245,11 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
     sbom_doc = generate_sbom(args.name, args.metadata)
     write_document_to_file(sbom_doc, args.output, args.validate)
-    print(f'SPDX SBOM written to {output_path}')
+    logging.info(f'SPDX SBOM written to {args.output}')

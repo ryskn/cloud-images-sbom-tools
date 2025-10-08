@@ -42,7 +42,7 @@ def collect_system_metadata(checksums: bool = False):
             'repo': dnf_pkg.repoid,
             'checksum': None,
             'sourcerpm': dnf_pkg.sourcerpm,
-            'license': dnf_pkg.license,
+            'license': None if dnf_pkg.license == '<NULL>' else dnf_pkg.license,
             'vendor': dnf_pkg.vendor,
             'files': dnf_pkg.files,
         }
