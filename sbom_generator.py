@@ -3,6 +3,7 @@ import json
 import logging
 import uuid
 import re
+import sys
 
 from datetime import datetime, timezone
 
@@ -250,6 +251,10 @@ if __name__ == '__main__':
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
-    sbom_doc = generate_sbom(args.name, args.metadata)
+    try:
+        sbom_doc = generate_sbom(args.name, args.metadata)
+    except Exception as e:
+        logging.error(f"Error generating SBOM: {e}", exc_info=True)
+        sys.exit(1)
     write_document_to_file(sbom_doc, args.output, args.validate)
     logging.info(f'SPDX SBOM written to {args.output}')
