@@ -51,13 +51,21 @@ def convert_to_spdx_format(license_text):
     if not license_text or license_text.strip() == '':
         return SpdxNoAssertion()
 
-    # Normalize the operators to detect multi-part expressions
+    license_text = license_text.strip()
+
+    # First, check if this is already a valid single SPDX license or can be mapped
+    if license_text in SPDX_IDS or license_text in FEDORA_SPDX_ID_MAP:
+        return convert_single_license(license_text)
+
     normalized_text = license_text
+
+    # Only normalize standalone "and" and "or" words, not those within license IDs
+    # Use word boundaries and negative lookbehind/lookahead to avoid matching within license IDs
     normalized_text = re.sub(
-        r'\b(and)\b', 'AND', normalized_text, flags=re.IGNORECASE
+        r'(?<![a-zA-Z0-9.-])\b(and)\b(?![a-zA-Z0-9.-])', 'AND', normalized_text, flags=re.IGNORECASE
     )
     normalized_text = re.sub(
-        r'\b(or)\b', 'OR', normalized_text, flags=re.IGNORECASE
+        r'(?<![a-zA-Z0-9.-])\b(or)\b(?![a-zA-Z0-9.-])', 'OR', normalized_text, flags=re.IGNORECASE
     )
 
     # Check if this is a multi-part expression
@@ -66,7 +74,7 @@ def convert_to_spdx_format(license_text):
         return create_license_ref_from_expression(normalized_text)
     else:
         # Single license: process normally
-        return convert_single_license(license_text.strip())
+        return convert_single_license(license_text)
 
 def create_license_ref_from_expression(license_expression):
     """
@@ -238,7 +246,7 @@ def generate_sbom(name, metadata_path):
 
     distro = metadata["distribution"]
     distro_for_purl = f"{distro['name']}-{distro['version'].split('.')[0]}"
-    extracted_licensing_info = set()
+    extracted_licensing_info = {}
 
     # Add Packages, Files, Relationships, LicenseRefs
     for pkg in metadata["packages"].values():
@@ -259,14 +267,13 @@ def generate_sbom(name, metadata_path):
         if not pkg_license:
             continue
         if pkg_license not in SPDX_IDS:
-            extracted_licensing_info.add(
-                (pkg_license, pkg.get('license'))
-            )
+            if pkg_license not in extracted_licensing_info:
+                extracted_licensing_info[pkg_license] = pkg.get('license').removeprefix("LicenseRef-")
 
-    for license in extracted_licensing_info:
+    for license_id, license_name in extracted_licensing_info.items():
         eli = ExtractedLicensingInfo(
-            license_id=license[0],
-            license_name=license[1],
+            license_id=license_id,
+            license_name=license_name,
             extracted_text='NONE',
         )
         doc.extracted_licensing_info.append(eli)
