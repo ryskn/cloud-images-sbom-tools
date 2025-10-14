@@ -43,27 +43,71 @@ def process_license_expression(license_text):
 
 def convert_to_spdx_format(license_text):
     """
-    Convert license text to SPDX-compliant format by mapping Fedora license names to SPDX identifiers.
+    Convert license text to SPDX-compliant format:
+    - Single valid SPDX license: use as-is
+    - Single non-valid SPDX license: create LicenseRef-
+    - Multi-part expressions: create single LicenseRef- for entire expression
     """
     if not license_text or license_text.strip() == '':
         return SpdxNoAssertion()
-    # Handle composite licenses with AND/OR operators
-    # First, normalize the operators (case-insensitive)
-    result = license_text
-    result = re.sub(r'\b(and)\b', 'AND', result, flags=re.IGNORECASE)
-    result = re.sub(r'\b(or)\b', 'OR', result, flags=re.IGNORECASE)
+
+    # Normalize the operators to detect multi-part expressions
+    normalized_text = license_text
+    normalized_text = re.sub(
+        r'\b(and)\b', 'AND', normalized_text, flags=re.IGNORECASE
+    )
+    normalized_text = re.sub(
+        r'\b(or)\b', 'OR', normalized_text, flags=re.IGNORECASE
+    )
+
+    # Check if this is a multi-part expression
+    if re.search(r'\b(AND|OR)\b', normalized_text):
+        # Multi-part expression: create single LicenseRef- for entire expression
+        return create_license_ref_from_expression(normalized_text)
+    else:
+        # Single license: process normally
+        return convert_single_license(license_text.strip())
+
+def create_license_ref_from_expression(license_expression):
+    """
+    Create a single LicenseRef- for a multi-part license expression.
+    """
     # Split by operators while preserving them
-    parts = re.split(r'\s+(AND|OR)\s+', result)
+    parts = re.split(r'\s+(AND|OR)\s+', license_expression)
+
     # Process individual license parts
+    # Convert to SPDX if valid, keep original otherwise
     processed_parts = []
     for part in parts:
         if part.strip() in ['AND', 'OR']:
             processed_parts.append(part.strip())
         else:
-            # This is a license name - convert it
-            converted = convert_single_license(part.strip())
-            processed_parts.append(converted)
-    return ' '.join(processed_parts)
+            license_part = part.strip()
+            if license_part in SPDX_IDS:
+                processed_parts.append(license_part)
+            elif license_part in FEDORA_SPDX_ID_MAP:
+                processed_parts.append(FEDORA_SPDX_ID_MAP[license_part])
+            else:
+                # Keep original license text for non-valid licenses
+                processed_parts.append(license_part)
+
+    expression_string = '-'.join(processed_parts)
+    sanitized_expression = sanitize_license_ref_name(expression_string)
+
+    return f'LicenseRef-{sanitized_expression}'
+
+def sanitize_license_ref_name(name):
+    """
+    Sanitize a string to be used in a LicenseRef- identifier.
+    """
+    return (
+        name.replace(' ', '-')
+            .replace('/', '-')
+            .replace('+', '-')
+            .replace('(', '')
+            .replace(')', '')
+            .replace(',', '')
+    )
 
 def convert_single_license(license_text):
     """
@@ -79,14 +123,7 @@ def convert_single_license(license_text):
     if license_text in FEDORA_SPDX_ID_MAP:
         return FEDORA_SPDX_ID_MAP[license_text]
     # If no mapping found, create a LicenseRef
-    sanitized_name = (
-        license_text.replace(' ', '-')
-                    .replace('/', '-')
-                    .replace('+', '-')
-                    .replace('(', '')
-                    .replace(')', '')
-                    .replace(',', '')
-    )
+    sanitized_name = sanitize_license_ref_name(license_text)
     return f'LicenseRef-{sanitized_name}'
 
 def gen_pkg_spdx_id(pkg_name):
