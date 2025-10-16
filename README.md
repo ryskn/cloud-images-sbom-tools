@@ -22,23 +22,32 @@ This toolkit provides a complete solution for collecting system metadata and gen
 
 ### 1. `sbom_data_collector.py`
 
-Collects comprehensive metadata from the system's installed packages using DNF/YUM.
+Collects comprehensive metadata from the system's installed packages.
 
 **Features:**
 - Extracts package information (name, version, release, architecture, etc.)
 - Collects license, vendor, and source RPM information
 - Optionally retrieves package checksums from repository metadata
+- **Fallback mechanism**: Works without DNF/RPM Python bindings by using `rpm` CLI
 - Outputs structured JSON metadata
 
 **Usage:**
 ```bash
-python sbom_data_collector.py -o metadata.json [-wc] [-v]
+# Scan the current system
+python sbom_data_collector.py -o metadata.json
+
+# Scan an extracted/mounted root filesystem
+python sbom_data_collector.py --root /path/to/rootfs -o metadata.json
 ```
 
 **Options:**
 - `-o, --output`: Output JSON file (required)
+- `--root`: Use target directory as the root filesystem (extracted or mounted)
 - `-wc, --with-checksums`: Collect available checksums from repository data
 - `-v, --verbose`: Enable verbose output
+
+**Limitations:**
+- `--with-checksums` is only supported when using DNF bindings. When falling back to rpm CLI, checksums will not be collected.
 
 ### 2. `sbom_generator.py`
 
@@ -83,23 +92,25 @@ Contains comprehensive license mapping data for converting Fedora license names 
 pip install -r requirements.txt
 ```
 
-2. Ensure DNF/YUM is available on your system (standard on RHEL/Fedora/AlmaLinux)
+2. For scanning external filesystems, extract or mount the target rootfs to a directory
 
 ## Dependencies
 
 - **spdx-tools** (0.8.3): SPDX library for creating and validating SPDX documents
-- **dnf**: Package manager for collecting system metadata (pre-installed on RHEL/Fedora/AlmaLinux)
+- **dnf/rpm** (optional): For native Python bindings. Falls back to `rpm` CLI if unavailable
 
 ## Example Workflow
 
-1. **Collect system metadata:**
+### Scan the current system
 ```bash
 python sbom_data_collector.py -o almalinux-metadata.json --with-checksums --verbose
+python sbom_generator.py "AlmaLinux-9.3-Cloud" almalinux-metadata.json almalinux-sbom.json --validate
 ```
 
-2. **Generate SBOM document:**
+### Scan an extracted container filesystem
 ```bash
-python sbom_generator.py "AlmaLinux-9.3-Cloud" almalinux-metadata.json almalinux-sbom.json --validate
+python sbom_data_collector.py --root /path/to/rootfs -o container-metadata.json
+python sbom_generator.py "AlmaLinux 10 Container" container-metadata.json container-sbom.json
 ```
 
 ## Output Formats
@@ -120,9 +131,8 @@ python sbom_generator.py "AlmaLinux-9.3-Cloud" almalinux-metadata.json almalinux
 
 - Python 3.8+
 - **spdx-tools** (0.8.3): Required for SPDX document creation and validation
-- DNF package manager (pre-installed on RHEL/Fedora/AlmaLinux systems)
-- Root/sudo access for system package inspection
-- Network access for repository metadata (when using --with-checksums option)
+- **rpm** CLI tool: Required for fallback collection when Python bindings unavailable
+- Root/sudo access may be required for system package inspection
 
 ## License Mapping
 
