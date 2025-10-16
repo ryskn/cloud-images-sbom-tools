@@ -22,7 +22,7 @@ This toolkit provides a complete solution for collecting system metadata and gen
 
 ### 1. `sbom_data_collector.py`
 
-Collects comprehensive metadata from the system's installed packages using DNF/YUM.
+Collects comprehensive metadata from the system's installed packages using DNF.
 
 **Features:**
 - Extracts package information (name, version, release, architecture, etc.)
@@ -32,11 +32,16 @@ Collects comprehensive metadata from the system's installed packages using DNF/Y
 
 **Usage:**
 ```bash
-python sbom_data_collector.py -o metadata.json [-wc] [-v]
+# Scan the current system
+python sbom_data_collector.py -o metadata.json
+
+# Scan an extracted/mounted root filesystem
+python sbom_data_collector.py --root /path/to/rootfs -o metadata.json
 ```
 
 **Options:**
 - `-o, --output`: Output JSON file (required)
+- `--root`: Use target directory as the root filesystem (for scanning containers/chroots)
 - `-wc, --with-checksums`: Collect available checksums from repository data
 - `-v, --verbose`: Enable verbose output
 
@@ -83,7 +88,7 @@ Contains comprehensive license mapping data for converting Fedora license names 
 pip install -r requirements.txt
 ```
 
-2. Ensure DNF/YUM is available on your system (standard on RHEL/Fedora/AlmaLinux)
+2. Ensure DNF is available on your system (standard on RHEL/Fedora/AlmaLinux)
 
 ## Dependencies
 
